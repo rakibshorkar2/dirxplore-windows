@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../core/network/dio_client.dart';
 import '../../providers/proxy_provider.dart';
 import '../../models/proxy_config.dart';
-import 'package:dio/dio.dart';
+import '../../services/native_bridge.dart';
 
 class ProxySettingsTab extends StatefulWidget {
   const ProxySettingsTab({super.key});
@@ -59,29 +58,28 @@ class _ProxySettingsTabState extends State<ProxySettingsTab> {
     });
 
     try {
-      final dioClient = DioClient();
-      dioClient.setProxy(
-        _hostController.text, 
-        int.parse(_portController.text), 
-        _type,
-        username: _usernameController.text.isNotEmpty ? _usernameController.text : null,
-        password: _passwordController.text.isNotEmpty ? _passwordController.text : null,
+      final String protocol = _type.toLowerCase().startsWith('socks') ? 'socks5' : 'http';
+      String? proxyUrl;
+      if (_hostController.text.isNotEmpty && _portController.text.isNotEmpty) {
+        if (_usernameController.text.isNotEmpty && _passwordController.text.isNotEmpty) {
+          proxyUrl = "$protocol://${_usernameController.text}:${_passwordController.text}@${_hostController.text}:${_portController.text}";
+        } else {
+          proxyUrl = "$protocol://${_hostController.text}:${_portController.text}";
+        }
+      }
+
+      final result = await NativeBridge().testProxy(
+        'http://www.gstatic.com/generate_204',
+        proxyUrl: proxyUrl,
       );
       
-      final stopwatch = Stopwatch()..start();
-      final response = await dioClient.dio.get('http://www.gstatic.com/generate_204', options: Options(
-        sendTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 10),
-      ));
-      stopwatch.stop();
-
-      if (response.statusCode == 200 || response.statusCode == 204 || response.statusCode == 301) {
+      if (result['success'] == true) {
         setState(() {
-          _testResult = 'Success! Latency: ${stopwatch.elapsedMilliseconds}ms';
+          _testResult = 'Success! Latency: ${result['latency']}ms';
         });
       } else {
         setState(() {
-          _testResult = 'Failed: HTTP ${response.statusCode}';
+          _testResult = 'Failed: ${result['error'] ?? 'Unknown error'}';
         });
       }
     } catch (e) {

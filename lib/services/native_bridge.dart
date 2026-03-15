@@ -13,6 +13,14 @@ class NativeBridge {
   final _updateController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get updates => _updateController.stream;
 
+  final Map<String, Completer<Map<String, dynamic>>> _testCompleters = {};
+
+  int? _localProxyPort;
+  int? get localProxyPort => _localProxyPort;
+
+  final Completer<int> _portCompleter = Completer<int>();
+  Future<int> get portFuture => _portCompleter.future;
+
   static const MethodChannel _taskbarChannel = MethodChannel('com.dirxplore/taskbar');
 
   Future<void> init({Map<String, String>? environment}) async {
@@ -35,8 +43,26 @@ class NativeBridge {
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
+        if (line.startsWith('LOCAL_PROXY_PORT:')) {
+          _localProxyPort = int.tryParse(line.split(':')[1]);
+          if (_localProxyPort != null && !_portCompleter.isCompleted) {
+            _portCompleter.complete(_localProxyPort);
+          }
+          return;
+        }
+
         try {
           final data = json.decode(line);
+
+          if (data['type'] == 'TEST_RESULT') {
+            final id = data['id'];
+            if (_testCompleters.containsKey(id)) {
+              _testCompleters[id]!.complete(data);
+              _testCompleters.remove(id);
+            }
+            return;
+          }
+
           _updateController.add(data);
           
           if (data['progress'] != null) {
@@ -54,6 +80,7 @@ class NativeBridge {
       _engineProcess!.exitCode.then((code) {
         debugPrint('Native Engine exited with code $code');
         _engineProcess = null;
+        _localProxyPort = null;
       });
     } catch (e) {
       debugPrint('Failed to start Native Engine: $e');
@@ -76,21 +103,36 @@ class NativeBridge {
     _sendCommand('CANCEL', id: id);
   }
 
-  void _sendCommand(String type, {required String id, String? url, String? savePath}) {
+  Future<Map<String, dynamic>> testProxy(String url, {String? proxyUrl}) {
+    final id = 'test_${DateTime.now().millisecondsSinceEpoch}';
+    final completer = Completer<Map<String, dynamic>>();
+    _testCompleters[id] = completer;
+
+    _sendCommand('TEST', id: id, url: url, proxyUrl: proxyUrl);
+    return completer.future.timeout(const Duration(seconds: 20), onTimeout: () {
+      _testCompleters.remove(id);
+      return {'success': false, 'error': 'Timeout'};
+    });
+  }
+
+  void _sendCommand(String type, {required String id, String? url, String? savePath, String? proxyUrl}) {
     if (_engineProcess == null) {
-      init().then((_) => _doSendCommand(type, id, url, savePath));
+      init().then((_) => _doSendCommand(type, id, url, savePath, proxyUrl));
     } else {
-      _doSendCommand(type, id, url, savePath);
+      _doSendCommand(type, id, url, savePath, proxyUrl);
     }
   }
 
-  void _doSendCommand(String type, String id, String? url, String? savePath) {
-    final cmd = json.encode({
+  void _doSendCommand(String type, String id, String? url, String? savePath, String? proxyUrl) {
+    final Map<String, dynamic> data = {
       'type': type,
       'id': id,
-      if (url != null) 'url': url,
-      if (savePath != null) 'savePath': savePath,
-    });
+    };
+    if (url != null) data['url'] = url;
+    if (savePath != null) data['savePath'] = savePath;
+    if (proxyUrl != null) data['proxyUrl'] = proxyUrl;
+    
+    final cmd = json.encode(data);
     _engineProcess?.stdin.writeln(cmd);
   }
 
@@ -105,5 +147,6 @@ class NativeBridge {
   void stop() {
     _engineProcess?.kill();
     _engineProcess = null;
+    _localProxyPort = null;
   }
 }

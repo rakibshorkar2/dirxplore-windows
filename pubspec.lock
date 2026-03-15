@@ -238,14 +238,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.33"
-  flutter_socks_proxy:
-    dependency: "direct main"
-    description:
-      name: flutter_socks_proxy
-      sha256: "5603ad90c2849d2e6f2b4ed3d337653b3a6c8fb471f535e3715254913a9206ce"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.3"
   flutter_test:
     dependency: "direct dev"
     description: flutter
@@ -661,14 +653,6 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  socks5_proxy:
-    dependency: "direct main"
-    description:
-      name: socks5_proxy
-      sha256: "80fa31a9ebfc0dc8de7b0e568c8d8927b65558ef2c7591cbee5afac814fb8f74"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.1.1"
   source_span:
     dependency: transitive
     description:

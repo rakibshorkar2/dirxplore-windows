@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,10 +16,11 @@ import (
 )
 
 type Command struct {
-	Type     string `json:"type"` // START, PAUSE, RESUME, CANCEL
+	Type     string `json:"type"` // START, PAUSE, RESUME, CANCEL, TEST
 	ID       string `json:"id"`
 	URL      string `json:"url,omitempty"`
 	SavePath string `json:"savePath,omitempty"`
+	ProxyURL string `json:"proxyUrl,omitempty"`
 }
 
 type ProgressUpdate struct {
@@ -46,6 +49,9 @@ var (
 )
 
 func main() {
+	// Start local proxy gateway
+	go startProxyGateway()
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var cmd Command
@@ -59,6 +65,84 @@ func main() {
 	}
 }
 
+func startProxyGateway() {
+	handler := &ProxyHandler{}
+	server := &http.Server{
+		Handler: handler,
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		sendError("Failed to start proxy listener: " + err.Error())
+		return
+	}
+
+	fmt.Printf("LOCAL_PROXY_PORT:%d\n", listener.Addr().(*net.TCPAddr).Port)
+
+	if err := server.Serve(listener); err != nil {
+		sendError("Proxy server error: " + err.Error())
+	}
+}
+
+type ProxyHandler struct{}
+
+func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		h.handleConnect(w, r)
+		return
+	}
+
+	// Normal HTTP request
+	resp, err := http.DefaultTransport.RoundTrip(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
+	destConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		destConn.Close()
+		return
+	}
+
+	go tunnel(clientConn, destConn)
+	go tunnel(destConn, clientConn)
+}
+
+func tunnel(src, dst net.Conn) {
+	defer src.Close()
+	defer dst.Close()
+	io.Copy(dst, src)
+}
+
+func copyHeader(dst, src http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
+}
+
 func handleCommand(cmd Command) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -69,14 +153,12 @@ func handleCommand(cmd Command) {
 			if state.Status == "downloading" {
 				return
 			}
-			// Resume existing
 			ctx, cancel := context.WithCancel(context.Background())
 			state.Ctx = ctx
 			state.Cancel = cancel
 			state.Status = "downloading"
 			go runDownload(state)
 		} else if cmd.Type == "START" {
-			// New download
 			ctx, cancel := context.WithCancel(context.Background())
 			state := &DownloadState{
 				ID:       cmd.ID,
@@ -104,7 +186,45 @@ func handleCommand(cmd Command) {
 			}
 			delete(activeDownloads, cmd.ID)
 		}
+	case "TEST":
+		go performTest(cmd)
 	}
+}
+
+func performTest(cmd Command) {
+	client := http.DefaultClient
+	if cmd.ProxyURL != "" {
+		pURL, err := url.Parse(cmd.ProxyURL)
+		if err == nil {
+			client = &http.Client{
+				Transport: &http.Transport{
+					Proxy: http.ProxyURL(pURL),
+				},
+				Timeout: 15 * time.Second,
+			}
+		}
+	}
+
+	start := time.Now()
+	resp, err := client.Get(cmd.URL)
+	latency := time.Since(start).Milliseconds()
+
+	result := map[string]interface{}{
+		"type":    "TEST_RESULT",
+		"id":      cmd.ID,
+		"url":     cmd.URL,
+		"latency": latency,
+		"success": err == nil,
+	}
+	if err != nil {
+		result["error"] = err.Error()
+	} else {
+		result["status"] = resp.StatusCode
+		resp.Body.Close()
+	}
+
+	data, _ := json.Marshal(result)
+	fmt.Println(string(data))
 }
 
 func runDownload(state *DownloadState) {
@@ -114,25 +234,20 @@ func runDownload(state *DownloadState) {
 		return
 	}
 
-	client := &http.Client{
-		Transport: http.DefaultTransport,
-	}
-
 	req, err := http.NewRequestWithContext(state.Ctx, "GET", state.URL, nil)
 	if err != nil {
 		sendUpdate(ProgressUpdate{ID: state.ID, Status: "error"})
 		return
 	}
 
-	// Range request for resuming
 	if state.Downloaded > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", state.Downloaded))
 	}
 
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if state.Ctx.Err() != nil {
-			return // Cancelled/Paused
+			return
 		}
 		sendUpdate(ProgressUpdate{ID: state.ID, Status: "error"})
 		return
