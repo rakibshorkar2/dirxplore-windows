@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 type Command struct {
@@ -24,6 +27,7 @@ type Command struct {
 }
 
 type ProgressUpdate struct {
+	Type       string  `json:"type,omitempty"`
 	ID         string  `json:"id"`
 	Downloaded int64   `json:"downloaded"`
 	Total      int64   `json:"total"`
@@ -92,7 +96,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normal HTTP request
+	// Normal HTTP request - http.DefaultTransport already respects HTTP_PROXY env
 	resp, err := http.DefaultTransport.RoundTrip(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -106,11 +110,40 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
-	destConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	// Establish connection to destination, respecting upstream proxy if set
+	var destConn net.Conn
+	var err error
+
+	upstreamProxy := os.Getenv("HTTP_PROXY")
+	if upstreamProxy == "" {
+		upstreamProxy = os.Getenv("all_proxy")
+	}
+
+	if upstreamProxy != "" {
+		u, parseErr := url.Parse(upstreamProxy)
+		if parseErr == nil && u.Scheme == "socks5" {
+			dialer, dialErr := proxy.FromURL(u, proxy.Direct)
+			if dialErr == nil {
+				destConn, err = dialer.Dial("tcp", r.Host)
+			} else {
+				err = dialErr
+			}
+		} else if parseErr == nil && (u.Scheme == "http" || u.Scheme == "https") {
+			// For HTTP upstream proxy, we connect to the proxy and send CONNECT
+			destConn, err = dialHTTPProxy(u, r.Host)
+		} else {
+			destConn, err = net.DialTimeout("tcp", r.Host, 10*time.Second)
+		}
+	} else {
+		destConn, err = net.DialTimeout("tcp", r.Host, 10*time.Second)
+	}
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	defer destConn.Close()
+
 	w.WriteHeader(http.StatusOK)
 
 	hijacker, ok := w.(http.Hijacker)
@@ -121,12 +154,56 @@ func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		destConn.Close()
 		return
 	}
+	defer clientConn.Close()
 
-	go tunnel(clientConn, destConn)
-	go tunnel(destConn, clientConn)
+	errChan := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(destConn, clientConn)
+		errChan <- err
+	}()
+	go func() {
+		_, err := io.Copy(clientConn, destConn)
+		errChan <- err
+	}()
+
+	<-errChan
+}
+
+func dialHTTPProxy(proxyURL *url.URL, targetHost string) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", proxyURL.Host, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: targetHost},
+		Host:   targetHost,
+		Header: make(http.Header),
+	}
+
+	if proxyURL.User != nil {
+		auth := proxyURL.User.String()
+		req.Header.Set("Proxy-Authorization", "Basic "+basicAuth(auth))
+	}
+
+	req.Write(conn)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		conn.Close()
+		return nil, fmt.Errorf("proxy HTTP CONNECT failed: %s", resp.Status)
+	}
+	return conn, nil
+}
+
+func basicAuth(auth string) string {
+	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
 func tunnel(src, dst net.Conn) {

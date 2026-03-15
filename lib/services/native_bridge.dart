@@ -18,15 +18,24 @@ class NativeBridge {
   int? _localProxyPort;
   int? get localProxyPort => _localProxyPort;
 
-  final Completer<int> _portCompleter = Completer<int>();
-  Future<int> get portFuture => _portCompleter.future;
+  Completer<int>? _portCompleter;
+  
+  /// Returns a future that completes with the local proxy port for the CURRENT session.
+  Future<int> get portFuture {
+    if (_localProxyPort != null) return Future.value(_localProxyPort);
+    _portCompleter ??= Completer<int>();
+    return _portCompleter!.future;
+  }
 
   static const MethodChannel _taskbarChannel = MethodChannel('com.dirxplore/taskbar');
 
-  Future<void> init({Map<String, String>? environment}) async {
+  Future<int> init({Map<String, String>? environment}) async {
     if (_engineProcess != null) {
       stop();
     }
+
+    _localProxyPort = null;
+    _portCompleter = Completer<int>();
 
     try {
       final exePath = Platform.isWindows 
@@ -44,9 +53,12 @@ class NativeBridge {
           .transform(const LineSplitter())
           .listen((line) {
         if (line.startsWith('LOCAL_PROXY_PORT:')) {
-          _localProxyPort = int.tryParse(line.split(':')[1]);
-          if (_localProxyPort != null && !_portCompleter.isCompleted) {
-            _portCompleter.complete(_localProxyPort);
+          final port = int.tryParse(line.split(':')[1]);
+          if (port != null) {
+            _localProxyPort = port;
+            if (_portCompleter != null && !_portCompleter!.isCompleted) {
+              _portCompleter!.complete(port);
+            }
           }
           return;
         }
@@ -81,9 +93,16 @@ class NativeBridge {
         debugPrint('Native Engine exited with code $code');
         _engineProcess = null;
         _localProxyPort = null;
+        _portCompleter = null;
       });
+
+      return _portCompleter!.future;
     } catch (e) {
       debugPrint('Failed to start Native Engine: $e');
+      if (_portCompleter != null && !_portCompleter!.isCompleted) {
+         _portCompleter!.completeError(e);
+      }
+      rethrow;
     }
   }
 
@@ -148,5 +167,6 @@ class NativeBridge {
     _engineProcess?.kill();
     _engineProcess = null;
     _localProxyPort = null;
+    _portCompleter = null;
   }
 }

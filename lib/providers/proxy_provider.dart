@@ -27,8 +27,7 @@ class AppProxyProvider with ChangeNotifier {
     if (maps.isNotEmpty) {
       _currentProxy = ProxyConfig.fromMap(maps.first);
       _isProxyEnabled = true;
-      _updateNativeEngineProxy();
-      _applyProxyToDio();
+      _updateNativeEngineProxy().then((_) => _applyProxyToDio());
     }
     
     final List<Map<String, dynamic>> allMaps = await db.query('proxies', where: 'isActive = ?', whereArgs: [0]);
@@ -57,8 +56,7 @@ class AppProxyProvider with ChangeNotifier {
 
     _currentProxy = activeProxy;
     _isProxyEnabled = true;
-    _updateNativeEngineProxy();
-    _applyProxyToDio();
+    _updateNativeEngineProxy().then((_) => _applyProxyToDio());
 
     final db = await _dbHelper.database;
     await db.transaction((txn) async {
@@ -77,7 +75,7 @@ class AppProxyProvider with ChangeNotifier {
     _currentProxy = null;
     _isProxyEnabled = false;
     dioClient.clearProxy();
-    _updateNativeEngineProxy();
+    await _updateNativeEngineProxy();
     final db = await _dbHelper.database;
     await db.update('proxies', {'isActive': 0});
     notifyListeners();
@@ -147,9 +145,9 @@ class AppProxyProvider with ChangeNotifier {
     }
   }
 
-  void _updateNativeEngineProxy() {
+  Future<void> _updateNativeEngineProxy() async {
     if (!_isProxyEnabled || _currentProxy == null) {
-      NativeBridge().init(environment: {}); // Clear proxy env
+      await NativeBridge().init(environment: {}); // Clear proxy env
       return;
     }
 
@@ -169,6 +167,6 @@ class AppProxyProvider with ChangeNotifier {
       'ALL_PROXY': proxyUrl,
       'NO_PROXY': 'localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16',
     };
-    NativeBridge().init(environment: env);
+    await NativeBridge().init(environment: env);
   }
 }
