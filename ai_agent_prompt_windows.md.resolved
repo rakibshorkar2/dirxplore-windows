@@ -1,0 +1,87 @@
+# AI Agent Prompt: Build DirXplore for Windows
+
+## Role
+You are an Expert Senior Flutter Developer specializing in Windows Desktop applications.
+
+## Objective
+Create **DirXplore Windows**, a high-performance, premium Windows-only application (Windows 10/11) for browsing HTTP/FTP open directories, managing concurrent downloads, and handling BitTorrent tasks. The app must feature a modern, semi-transparent "Glassmorphism" UI, robust proxy management, and integrated media playback.
+
+## Core Feature Specifications
+
+### 1. Browser (Open Directory Explorer)
+- **URL Handling**: Input for URL, Paste/Copy buttons, Connect/Go action.
+- **Parsing**: Parse Apache/Nginx-style directory listings into a clean file list. Handle custom sites via a "Fallback/WebView" mode if parsing fails.
+- **Navigation**: Full history support (Back/Forward), "Up" to parent directory, and clickable Breadcrumbs.
+- **Deep Crawler**: A recursive BFS background engine to scan subdirectories for specific file types (Movies, Software, etc.) and auto-queue them.
+- **Bookmarks**: Save and manage favorite directory URLs.
+
+### 2. Advanced Download Manager
+- **Concurrency**: User-configurable limit for simultaneous downloads.
+- **Resumability**: Robust Pause/Resume using HTTP Range headers. Handle connection drops with auto-retry.
+- **Smart Folder Routing**: Automatically sort downloads into subfolders based on file type (e.g., `.mkv` -> `Movies`, `.exe` -> `Software`).
+- **Metrics**: Real-time speed (MB/s), Progress (%), ETA, and total/free disk space indicators.
+- **Queue Management**: Multi-select support for bulk pause, resume, or delete.
+
+### 3. BitTorrent Support
+- **Engine**: Support for Magnet links and `.torrent` files.
+- **Features**: Sequential downloading (for streaming), global/per-torrent speed limits, and individual file selection within a torrent.
+
+### 4. Advanced Proxy Manager
+- **Protocols**: Support SOCKS4, SOCKS5, HTTP, and HTTPS.
+- **Scope**: Proxies must apply ONLY to the app's internal networking (`dio` stack), NOT the system-wide VPN settings.
+- **Management**: Add manual proxies or via URI strings. Include a "Test Proxy" button with latency (ms) reporting.
+
+### 5. Media & Tooling
+- **Media Player**: Integrated player using `media_kit` for seamless playback of downloaded files.
+- **Local Proxy Tunnel**: A localhost server to stream downloaded content or torrents to external players like VLC.
+- **Security**: Biometric (Windows Hello) or PIN lock system to protect the app.
+
+## Windows-Specific Technical Requirements
+
+### 1. Window Management
+- Use `window_manager` or similar to handle:
+    - Custom title bars (frameless look).
+    - Minimum/initial window sizes optimized for desktop (e.g., 1024x768).
+    - System tray integration (minimize to tray).
+
+### 2. UI/UX Design System
+- **Style**: Blend of Material 3 and Windows Fluent Design.
+- **Effects**: Use `bitsdojo_window` or `window_manager` for "Acrylic" or "Mica" background effects.
+- **Typography**: Optimized for desktop (Inter or Segoe UI).
+- **Dark Mode**: High-contrast Dark Mode with a "True AMOLED Black" option.
+
+### 3. File System & Storage
+- Use `path_provider` to locate the Windows `Downloads` and `Documents` folders.
+- Use `sqflite_common_ffi` for local database (downloads history, settings, proxies).
+- Ensure all file paths handle Windows backslashes (`\`) correctly using the `path` package.
+
+### 4. Networking
+- Use `dio` with a custom `HttpClientAdapter` to inject proxy settings.
+- Implement efficient chunk-based writing for downloads to maximize disk I/O on Windows.
+
+## Implementation Roadmap
+
+1.  **Project Setup**: Initialize Flutter Windows, add dependencies (`dio`, `media_kit`, `provider`, `sqflite_common_ffi`, `window_manager`).
+2.  **Core Services**: Build the `DioClient` (proxy injection), [DownloadProvider](file:///f:/dirxplorewindows/dirxplore-pro/lib/providers/download_provider.dart#22-797) (concurrency logic), and `TorrentService`.
+3.  **UI Shell**: Create the main layout with a sidebar (Fluent style) or floating navigation, implementing window transparency.
+4.  **Feature Modules**: Build the Browser, Download Manager, Proxy Tab, and Torrent Tab sequentially.
+5.  **Polishing**: Add Windows tray icons, keyboard shortcuts (Ctrl+S for search, etc.), and local notifications.
+
+## Key Dependencies for pubspec.yaml
+```yaml
+dependencies:
+  dio: ^5.7.0
+  provider: ^6.1.2
+  sqflite_common_ffi: ^2.3.4
+  path_provider: ^2.1.5
+  media_kit: ^1.1.10
+  media_kit_video: ^1.2.4
+  window_manager: ^0.4.3
+  bitsdojo_window: ^0.1.6
+  flex_color_scheme: ^7.3.1
+  # (Include other necessary UI and networking packages)
+```
+
+## Performance Focus
+- Use **Isolates** for HTML parsing and deep crawling to keep the Windows UI thread responsive.
+- Optimize disk writes for multi-gigabit fiber connections.
