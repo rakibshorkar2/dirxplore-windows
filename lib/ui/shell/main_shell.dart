@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../browser/browser_tab.dart';
 import '../downloads/downloads_tab.dart';
+import '../bittorrent/bittorrent_tab.dart';
 import '../settings/proxy_settings_tab.dart';
 import '../settings/app_settings_tab.dart';
 import '../../providers/theme_provider.dart';
@@ -33,7 +34,7 @@ class _MainShellState extends State<MainShell> with WindowListener {
   final List<Widget> _pages = [
     const BrowserTab(),
     const DownloadsTab(),
-    const Center(child: Text('BitTorrent Tab')),
+    const BittorrentTab(),
     const ProxySettingsTab(),
     const AppSettingsTab(),
   ];
@@ -71,14 +72,17 @@ class _MainShellState extends State<MainShell> with WindowListener {
                 _buildNavItem(Icons.explore, 'Browser', 0),
                 _buildNavItem(Icons.download, 'Downloads', 1),
                 _buildNavItem(Icons.cloud_download, 'BitTorrent', 2),
-                _buildNavItem(Icons.security, 'Proxy', 3), // Renamed from Settings
-                _buildNavItem(Icons.settings, 'Settings', 4), // Added new App Settings
+                _buildNavItem(Icons.security, 'Proxy', 3), 
+                _buildNavItem(Icons.settings, 'Settings', 4),
               ],
             ),
           ),
-          // Main Content
+          // Main Content with state preservation
           Expanded(
-            child: _pages[_selectedIndex],
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: _pages,
+            ),
           ),
         ],
       ),

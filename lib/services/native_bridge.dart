@@ -42,20 +42,28 @@ class NativeBridge {
           ? 'native_engine/dirxplore_engine.exe' 
           : './dirxplore_engine';
 
+      final Map<String, String> fullEnv = Map.from(Platform.environment);
+      if (environment != null) {
+        fullEnv.addAll(environment);
+      }
+
       _engineProcess = await Process.start(
         exePath, 
         [], 
-        environment: environment,
+        environment: fullEnv,
       );
 
       _engineProcess!.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
+        debugPrint('Native Engine Out: $line');
         if (line.startsWith('LOCAL_PROXY_PORT:')) {
-          final port = int.tryParse(line.split(':')[1]);
+          final portStr = line.split(':')[1].trim();
+          final port = int.tryParse(portStr);
           if (port != null) {
             _localProxyPort = port;
+            debugPrint('Identified local proxy port: $port');
             if (_portCompleter != null && !_portCompleter!.isCompleted) {
               _portCompleter!.complete(port);
             }

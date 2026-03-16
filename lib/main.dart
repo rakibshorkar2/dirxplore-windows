@@ -9,15 +9,12 @@ import 'providers/app_settings_provider.dart';
 import 'providers/download_provider.dart';
 import 'providers/proxy_provider.dart';
 import 'providers/theme_provider.dart';
-import 'services/native_bridge.dart';
+import 'providers/torrent_search_provider.dart';
 import 'core/database/db_helper.dart';
 import 'ui/shell/main_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Initialize Native Engine
-  await NativeBridge().init();
   
   // Media Kit init
   MediaKit.ensureInitialized();
@@ -45,9 +42,10 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
-        ChangeNotifierProvider(create: (_) => AppProxyProvider()..loadProxy()),
+        ChangeNotifierProvider(create: (_) => AppProxyProvider()..loadProxies()),
         ChangeNotifierProvider(create: (_) => AppSettingsProvider()),
         ChangeNotifierProvider(create: (_) => DownloadProvider()..loadTasks()),
+        ChangeNotifierProvider(create: (_) => TorrentSearchProvider()),
       ],
       child: const DirXploreApp(),
     ),

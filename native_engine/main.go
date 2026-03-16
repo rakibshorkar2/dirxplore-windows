@@ -91,14 +91,54 @@ func startProxyGateway() {
 type ProxyHandler struct{}
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(os.Stderr, "[Proxy] Request: %s %s (Host: %s)\n", r.Method, r.URL.String(), r.Host)
+
 	if r.Method == http.MethodConnect {
 		h.handleConnect(w, r)
 		return
 	}
 
-	// Normal HTTP request - http.DefaultTransport already respects HTTP_PROXY env
-	resp, err := http.DefaultTransport.RoundTrip(r)
+	// Normal HTTP request
+	// Step 1: Fix URL if it's relative (which happens when used as a proxy)
+	if r.URL.Scheme == "" {
+		if r.TLS == nil {
+			r.URL.Scheme = "http"
+		} else {
+			r.URL.Scheme = "https"
+		}
+	}
+	if r.URL.Host == "" {
+		r.URL.Host = r.Host
+	}
+
+	r.RequestURI = ""
+
+	// Clone default transport to keep good defaults but allow custom dialing
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+
+	// Check for upstream proxy from environment
+	proxyURL, err := http.ProxyFromEnvironment(r)
+	if err == nil && proxyURL != nil {
+		fmt.Fprintf(os.Stderr, "[Proxy] Using Upstream: %s\n", proxyURL.String())
+		if proxyURL.Scheme == "socks5" {
+			dialer, dialErr := proxy.FromURL(proxyURL, proxy.Direct)
+			if dialErr == nil {
+				if cd, ok := dialer.(proxy.ContextDialer); ok {
+					transport.DialContext = cd.DialContext
+				} else {
+					transport.Dial = dialer.Dial
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "[Proxy] SOCKS5 Init Error: %v\n", dialErr)
+			}
+		} else {
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+
+	resp, err := transport.RoundTrip(r)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Proxy] RoundTrip Error: %v\n", err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -110,27 +150,26 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
-	// Establish connection to destination, respecting upstream proxy if set
+	fmt.Fprintf(os.Stderr, "[Proxy] CONNECT to %s\n", r.Host)
+	
 	var destConn net.Conn
 	var err error
 
-	upstreamProxy := os.Getenv("HTTP_PROXY")
-	if upstreamProxy == "" {
-		upstreamProxy = os.Getenv("all_proxy")
-	}
+	// Check Upstream
+	targetURL := &url.URL{Scheme: "https", Host: r.Host}
+	proxyURL, _ := http.ProxyFromEnvironment(&http.Request{URL: targetURL})
 
-	if upstreamProxy != "" {
-		u, parseErr := url.Parse(upstreamProxy)
-		if parseErr == nil && u.Scheme == "socks5" {
-			dialer, dialErr := proxy.FromURL(u, proxy.Direct)
+	if proxyURL != nil {
+		fmt.Fprintf(os.Stderr, "[Proxy] Using Upstream for CONNECT: %s\n", proxyURL.String())
+		if proxyURL.Scheme == "socks5" {
+			dialer, dialErr := proxy.FromURL(proxyURL, proxy.Direct)
 			if dialErr == nil {
 				destConn, err = dialer.Dial("tcp", r.Host)
 			} else {
 				err = dialErr
 			}
-		} else if parseErr == nil && (u.Scheme == "http" || u.Scheme == "https") {
-			// For HTTP upstream proxy, we connect to the proxy and send CONNECT
-			destConn, err = dialHTTPProxy(u, r.Host)
+		} else if proxyURL.Scheme == "http" || proxyURL.Scheme == "https" {
+			destConn, err = dialHTTPProxy(proxyURL, r.Host)
 		} else {
 			destConn, err = net.DialTimeout("tcp", r.Host, 10*time.Second)
 		}
@@ -139,6 +178,7 @@ func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[Proxy] CONNECT Error: %v\n", err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -269,17 +309,38 @@ func handleCommand(cmd Command) {
 }
 
 func performTest(cmd Command) {
-	client := http.DefaultClient
+	fmt.Fprintf(os.Stderr, "[Proxy] Test Request: %s\n", cmd.URL)
+	
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if cmd.ProxyURL != "" {
 		pURL, err := url.Parse(cmd.ProxyURL)
 		if err == nil {
-			client = &http.Client{
-				Transport: &http.Transport{
-					Proxy: http.ProxyURL(pURL),
-				},
-				Timeout: 15 * time.Second,
+			fmt.Fprintf(os.Stderr, "[Proxy] Test Using URI: %s\n", cmd.ProxyURL)
+			if pURL.Scheme == "socks5" {
+				dialer, dialErr := proxy.FromURL(pURL, proxy.Direct)
+				if dialErr == nil {
+					if cd, ok := dialer.(proxy.ContextDialer); ok {
+						transport.DialContext = cd.DialContext
+					} else {
+						transport.Dial = dialer.Dial
+					}
+				}
+			} else {
+				transport.Proxy = http.ProxyURL(pURL)
 			}
 		}
+	} else {
+		// Use environment if NO explicit proxy URL provided
+		pURL, _ := http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "http", Host: "example.com"}})
+		if pURL != nil {
+			fmt.Fprintf(os.Stderr, "[Proxy] Test Using Environment: %s\n", pURL.String())
+            // (Same SOCKS5 logic could be applied here if needed)
+		}
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   15 * time.Second,
 	}
 
 	start := time.Now()

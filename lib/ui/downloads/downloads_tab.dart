@@ -94,6 +94,12 @@ class DownloadsTab extends StatelessWidget {
                       onPressed: () => _showDeleteConfirmation(context, provider),
                       tooltip: 'Delete Selected',
                     ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.select_all),
+                      onPressed: () => provider.selectAll(),
+                      tooltip: 'Select All',
+                    ),
                   ] else ...[
                     const Text('Downloads', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const Spacer(),
