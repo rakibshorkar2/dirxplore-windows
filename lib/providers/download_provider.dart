@@ -20,16 +20,26 @@ class DownloadProvider with ChangeNotifier {
         final task = _tasks[taskIndex];
         task.status = data['status'] ?? task.status;
         task.downloadedBytes = data['downloaded'] ?? task.downloadedBytes;
-        task.totalBytes = data['total'] ?? task.totalBytes;
+        
+        // Preserve total size if it's already set and new total is 0 or null
+        if (data['total'] != null && data['total'] > 0) {
+          task.totalBytes = data['total'];
+        }
+        
         task.progress = data['progress'] ?? task.progress;
         task.speed = data['speed'] ?? task.speed;
         
         if (task.status == 'completed') {
            _currentActiveDownloads--;
+           task.speed = 0;
            _processQueue();
-        } else if (task.status == 'error' || task.status == 'paused') {
+        } else if (task.status == 'error') {
            _currentActiveDownloads--;
+           task.speed = 0;
            _processQueue();
+        } else if (task.status == 'paused') {
+           // Paused count is handled in pauseDownload
+           task.speed = 0;
         }
         
         notifyListeners();
@@ -82,11 +92,23 @@ class DownloadProvider with ChangeNotifier {
   }
 
   Future<void> addDownload(String url, String savePath, String fileName) async {
+    int existingSize = 0;
+    try {
+      final file = File(savePath);
+      if (await file.exists()) {
+        existingSize = await file.length();
+      }
+    } catch (e) {
+      debugPrint('Error checking existing file: $e');
+    }
+
     final task = DownloadTask(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       url: url,
       savePath: savePath,
       fileName: fileName,
+      downloadedBytes: existingSize,
+      progress: 0.0, // Will be updated on first progress from bridge
     );
     _tasks.add(task);
     final db = await _dbHelper.database;
@@ -106,6 +128,14 @@ class DownloadProvider with ChangeNotifier {
   }
 
   Future<void> _startDownload(DownloadTask task) async {
+    // Refresh existing size before starting
+    try {
+      final file = File(task.savePath);
+      if (await file.exists()) {
+        task.downloadedBytes = await file.length();
+      }
+    } catch (_) {}
+
     task.status = 'downloading';
     _currentActiveDownloads++;
     notifyListeners();

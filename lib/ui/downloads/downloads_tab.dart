@@ -104,6 +104,12 @@ class DownloadsTab extends StatelessWidget {
                     const Text('Downloads', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const Spacer(),
                     if (tasks.isNotEmpty) ...[
+                      IconButton(
+                        icon: const Icon(Icons.select_all_outlined),
+                        onPressed: () => provider.selectAll(),
+                        tooltip: 'Select All',
+                      ),
+                      const SizedBox(width: 8),
                       TextButton.icon(
                         icon: const Icon(Icons.pause_circle_outline, size: 20),
                         label: const Text('Pause All'),

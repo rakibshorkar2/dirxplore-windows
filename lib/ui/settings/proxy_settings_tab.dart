@@ -394,6 +394,9 @@ class _AddProxyViewState extends State<_AddProxyView> {
   String? _uriParseError;
   ProxyConfig? _parsedPreview;
 
+  // Form C — YAML paste
+  final _yamlPasteCtrl = TextEditingController();
+
   @override
   void dispose() {
     _nameCtrl.dispose();
@@ -402,6 +405,7 @@ class _AddProxyViewState extends State<_AddProxyView> {
     _userCtrl.dispose();
     _passCtrl.dispose();
     _uriCtrl.dispose();
+    _yamlPasteCtrl.dispose();
     super.dispose();
   }
 
@@ -464,7 +468,7 @@ class _AddProxyViewState extends State<_AddProxyView> {
         await widget.provider.importProxiesFromYaml(content);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Proxies imported successfully.'))
+            const SnackBar(content: Text('Proxies imported from file.'))
           );
           widget.onAdded();
         }
@@ -474,6 +478,57 @@ class _AddProxyViewState extends State<_AddProxyView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e'))
         );
+      }
+    }
+  }
+
+  Future<void> _importYamlFromText() async {
+    final text = _yamlPasteCtrl.text.trim();
+    if (text.isEmpty) return;
+    try {
+      await widget.provider.importProxiesFromYaml(text);
+      if (mounted) {
+        _yamlPasteCtrl.clear();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Proxies imported from pasted YAML.'))
+        );
+        widget.onAdded();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
+
+  Future<void> _importBundledYaml() async {
+    try {
+      // Look for bypassempire.yaml in the same directory as the executable
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      var yamlFile = File('$exeDir/bypassempire.yaml');
+      if (!await yamlFile.exists()) {
+        // Fall back to working directory
+        yamlFile = File('bypassempire.yaml');
+      }
+      if (!await yamlFile.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('bypassempire.yaml not found next to the executable.'))
+          );
+        }
+        return;
+      }
+      final content = await yamlFile.readAsString();
+      await widget.provider.importProxiesFromYaml(content);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Imported proxies from bypassempire.yaml.'))
+        );
+        widget.onAdded();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }
@@ -690,10 +745,12 @@ class _AddProxyViewState extends State<_AddProxyView> {
                   ?.copyWith(fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
           Text(
-            'Upload a .yaml file containing proxies list.',
+            'Import proxies from a Clash/BypassEmpire compatible YAML file.',
             style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
           ),
           const SizedBox(height: 16),
+
+          // Option 1: File picker
           OutlinedButton.icon(
             onPressed: _importYaml,
             icon: const Icon(Icons.upload_file),
@@ -701,6 +758,39 @@ class _AddProxyViewState extends State<_AddProxyView> {
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             ),
+          ),
+          const SizedBox(height: 8),
+          // Option 2: Import bundled bypassempire.yaml
+          FilledButton.icon(
+            onPressed: _importBundledYaml,
+            icon: const Icon(Icons.shield_outlined),
+            label: const Text('Import Bundled bypassempire.yaml'),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Option 3: Paste YAML inline
+          Text('— or paste YAML content directly —',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _yamlPasteCtrl,
+            maxLines: 8,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            decoration: const InputDecoration(
+              labelText: 'Paste YAML here',
+              alignLabelWithHint: true,
+              border: OutlineInputBorder(),
+              hintText: 'proxies:\n  - name: "My Proxy"\n    type: socks5\n    server: 1.2.3.4\n    port: 1080\n    username: user\n    password: pass',
+            ),
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: _importYamlFromText,
+            icon: const Icon(Icons.check),
+            label: const Text('Import Pasted YAML'),
           ),
           const SizedBox(height: 40),
         ],

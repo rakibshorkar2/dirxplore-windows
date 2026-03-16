@@ -161,16 +161,17 @@ func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	if proxyURL != nil {
 		fmt.Fprintf(os.Stderr, "[Proxy] Using Upstream for CONNECT: %s\n", proxyURL.String())
-		if proxyURL.Scheme == "socks5" {
+		switch proxyURL.Scheme {
+		case "socks5":
 			dialer, dialErr := proxy.FromURL(proxyURL, proxy.Direct)
 			if dialErr == nil {
 				destConn, err = dialer.Dial("tcp", r.Host)
 			} else {
 				err = dialErr
 			}
-		} else if proxyURL.Scheme == "http" || proxyURL.Scheme == "https" {
+		case "http", "https":
 			destConn, err = dialHTTPProxy(proxyURL, r.Host)
-		} else {
+		default:
 			destConn, err = net.DialTimeout("tcp", r.Host, 10*time.Second)
 		}
 	} else {
@@ -372,6 +373,14 @@ func runDownload(state *DownloadState) {
 		return
 	}
 
+	// Auto-detect existing file size for resume if not already set
+	if state.Downloaded == 0 {
+		if info, err := os.Stat(state.SavePath); err == nil {
+			state.Downloaded = info.Size()
+			fmt.Fprintf(os.Stderr, "[Proxy] Resuming %s from %d bytes\n", state.ID, state.Downloaded)
+		}
+	}
+
 	req, err := http.NewRequestWithContext(state.Ctx, "GET", state.URL, nil)
 	if err != nil {
 		sendUpdate(ProgressUpdate{ID: state.ID, Status: "error"})
@@ -392,11 +401,26 @@ func runDownload(state *DownloadState) {
 	}
 	defer resp.Body.Close()
 
-	if state.Downloaded == 0 {
-		state.Total = resp.ContentLength
-	} else if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+	// If we requested a range but got 200 OK, it means the server doesn't support Range
+	// or decided to send the full file. We must start from scratch.
+	if state.Downloaded > 0 && resp.StatusCode == http.StatusOK {
+		fmt.Fprintf(os.Stderr, "[Proxy] Server doesn't support Range for %s, starting from scratch\n", state.ID)
+		state.Downloaded = 0
+	} else if state.Downloaded > 0 && resp.StatusCode != http.StatusPartialContent {
 		sendUpdate(ProgressUpdate{ID: state.ID, Status: "error"})
 		return
+	}
+
+	// Update total size from Content-Range if possible
+	if resp.Header.Get("Content-Range") != "" {
+		// Example: bytes 100-200/500
+		var start, end, total int64
+		_, err := fmt.Sscanf(resp.Header.Get("Content-Range"), "bytes %d-%d/%d", &start, &end, &total)
+		if err == nil {
+			state.Total = total
+		}
+	} else if state.Downloaded == 0 {
+		state.Total = resp.ContentLength
 	}
 
 	var file *os.File
